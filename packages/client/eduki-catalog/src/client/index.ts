@@ -30,8 +30,12 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 /** Required service: only the slot registry. */
 export const inject = ['slots']
 
-const CATALOG_LABELS = { de: { all: 'Alle Themenhefte', intro: 'Einstiegshefte · 3,99 €', premium: 'Premium-Autorenhefte', label: 'Heftauswahl', badge: '★ Einstiegsheft · 3,99 €', help: 'Erstes Themenheft dieses Fachs · 3,99 €' } } as const
+const CATALOG_LABELS = { de: { all: 'Alle Themenhefte', grundschule: 'Grundschulhefte', sekundar: 'Sekundarschule', intro: 'Einstiegshefte · 3,99 €', premium: 'Premium-Autorenhefte', label: 'Heftauswahl', badge: '★ Einstiegsheft · 3,99 €', help: 'Erstes Themenheft dieses Fachs · 3,99 €' } } as const
 const catalogText = CATALOG_LABELS.de
+
+// Katalog-Filter: eigene Liste pro Kategorie (Grundschule → Sekundarschule →
+// Premium) plus die Auswahlliste der vergünstigten Einstiegshefte.
+type CatalogFilter = '' | 'grundschule' | 'sekundarschule' | 'einstiegsheft' | 'premium'
 
 const SNAPSHOT_URL = 'https://dsh.cyberschooling.eu/preview/edukit-catalog-snapshot.json'
 const UPLOAD_ENDPOINT = 'https://ws.cyberschooling.eu/api/eduki-products/upload-heft'
@@ -95,6 +99,11 @@ type Heft = {
   einstiegsheft?: boolean         // Convenience-Flag: vom Snapshot-Script aus dem Tag gesetzt
   premium?: boolean
   category?: string
+  categoryLabel?: string
+  categoryOrder?: number
+  productFamily?: string
+  ageBand?: string
+  level?: string
   priceCents?: number
   priceEur?: number
 }
@@ -142,6 +151,18 @@ function isEinstiegsheft(h: Heft): boolean {
 
 function isPremiumHeft(h: Heft): boolean {
   return h.premium === true || h.category === 'premium-autorenheft' || (h.tags || []).includes('premium-autorenheft')
+}
+
+function isGrundschulHeft(h: Heft): boolean {
+  return h.category === 'grundschulheft'
+    || (h.tags || []).includes('grundschulheft')
+    || h.productFamily === 'PRIMARY'
+    || (h.group === 'PRIMARY')
+}
+
+function isSekundarHeft(h: Heft): boolean {
+  // Alle bisherigen normalen Titelhefte: weder Grundschule noch Premium.
+  return !isGrundschulHeft(h) && !isPremiumHeft(h)
 }
 
 // ── Shared open-state (sidebar trigger <-> overlay) ────────────────────────
@@ -286,13 +307,15 @@ function HeftList(props: {
   hefte: Heft[]
   query: string
   subjectFilter: string
-  catalogFilter: '' | 'einstiegsheft' | 'premium'
+  catalogFilter: CatalogFilter
   onSelect: (h: Heft) => void
   onUpload: (title: string) => void
 }) {
   const q = props.query.trim().toLowerCase()
   const filtered = props.hefte.filter((h) => {
     if (props.subjectFilter && h.subject !== props.subjectFilter) return false
+    if (props.catalogFilter === 'grundschule' && !isGrundschulHeft(h)) return false
+    if (props.catalogFilter === 'sekundarschule' && !isSekundarHeft(h)) return false
     if (props.catalogFilter === 'einstiegsheft' && !isEinstiegsheft(h)) return false
     if (props.catalogFilter === 'premium' && !isPremiumHeft(h)) return false
     if (!q) return true
@@ -304,7 +327,9 @@ function HeftList(props: {
   })
   if (filtered.length === 0) {
     return h('div', { className: 'eduki-cat-empty' },
-      props.catalogFilter === 'einstiegsheft' ? 'Keine Einstiegshefte gefunden — Tag „einstiegsheft“ fehlt im Snapshot.'
+      props.catalogFilter === 'grundschule' ? 'Keine Grundschulhefte gefunden — Kategorie „grundschulheft“ fehlt im Snapshot.'
+        : props.catalogFilter === 'sekundarschule' ? 'Keine Sekundarhefte gefunden.'
+        : props.catalogFilter === 'einstiegsheft' ? 'Keine Einstiegshefte gefunden — Tag „einstiegsheft“ fehlt im Snapshot.'
         : props.catalogFilter === 'premium' ? 'Keine Premium-Autorenhefte gefunden.'
         : q ? `Keine Hefte passen zu „${props.query}“`
           : (props.subjectFilter ? `Keine Hefte zu „${props.subjectFilter}“ gefunden.` : 'Keine Hefte gefunden.'))
@@ -998,14 +1023,15 @@ function CatalogOverlay() {
 
   // Katalogauswahl: genau eine Ausgabegruppe anzeigen und Auswahl persistent halten.
   const CATALOG_FILTER_KEY = 'eduki-cat-filter'
-  const catalogFilterPair = useState<'' | 'einstiegsheft' | 'premium'>(() => {
+  const VALID_FILTERS: CatalogFilter[] = ['', 'grundschule', 'sekundarschule', 'einstiegsheft', 'premium']
+  const catalogFilterPair = useState<CatalogFilter>(() => {
     try {
-      const saved = window.localStorage.getItem(CATALOG_FILTER_KEY)
-      return saved === 'einstiegsheft' || saved === 'premium' ? saved : ''
+      const saved = window.localStorage.getItem(CATALOG_FILTER_KEY) as CatalogFilter
+      return VALID_FILTERS.includes(saved) ? saved : ''
     } catch { return '' }
   })
   const catalogFilter = catalogFilterPair[0]
-  const setCatalogFilter = (v: '' | 'einstiegsheft' | 'premium'): void => {
+  const setCatalogFilter = (v: CatalogFilter): void => {
     catalogFilterPair[1](v)
     try { window.localStorage.setItem(CATALOG_FILTER_KEY, v) } catch { /* ignore */ }
   }
@@ -1096,9 +1122,14 @@ function CatalogOverlay() {
     })
   } else {
     const einstiegCount = hefte.filter(isEinstiegsheft).length
+    const grundschulCount = hefte.filter(isGrundschulHeft).length
+    const sekundaerCount = hefte.filter(isSekundarHeft).length
     const premiumCount = hefte.filter(isPremiumHeft).length
     const meta = h('div', { className: 'eduki-cat-meta' },
-      h('span', null, catalogFilter === 'einstiegsheft'
+      h('span', null, catalogFilter === 'grundschule'
+        ? `${grundschulCount} Grundschulhefte (von ${hefte.length} Heften insgesamt)`
+        : catalogFilter === 'sekundarschule' ? `${sekundaerCount} Sekundarhefte`
+        : catalogFilter === 'einstiegsheft'
         ? `${einstiegCount} Einstiegshefte (von ${hefte.length} Heften insgesamt)`
         : catalogFilter === 'premium' ? `${premiumCount} Premium-Autorenhefte`
         : `${hefte.length} Hefte insgesamt`),
