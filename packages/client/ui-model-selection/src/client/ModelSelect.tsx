@@ -1,21 +1,20 @@
 /**
  * ModelSelect: the composer's named model seat (`conversation.input.model`).
- * Two-level selection per figma 496:26454's MenuDropdown: the root menu is
- * the Model / Effort row pair (label + current value + a right chevron),
- * each drilling into its own list — the provider-grouped model list over
- * the shared directory, and the effort levels. The trigger (313:14108's
- * ToggleButton) shows both: model name + effort in the caption tone.
+ * One-level selection: the trigger opens directly into the provider-grouped
+ * model list over the shared directory; a reasoning model additionally shows
+ * its Effort row above the list, which drills into the effort levels. The
+ * trigger (313:14108's ToggleButton) shows both: model name + effort in the
+ * caption tone.
  * Model catalogs above four entries show search, which retains focus while
  * ↑/↓ cycle the highlighted result; Enter and Tab accept it. Smaller model
- * catalogs, root panes, and effort panes move focus between rows. Escape and Shift+Tab leave a drilled pane first and otherwise close
- * back to the trigger. A drilled pane focuses the current effort or model
- * search field. Provider headings paint their background only while pinned
- * by scrolling. Clearing a query restores the full list and search focus.
- * Selecting restores trigger focus without a ring until the trigger loses focus
- * or the menu reopens. Model names match a case-insensitive ordered subsequence
- * within each provider group, ranked by
- * prefix, alignment score, then catalog order. Returning to the root pane
- * hands focus back to the cell that opened it. Data and submission ride the
+ * catalogs and the effort pane move focus between rows. Escape and Shift+Tab
+ * leave the effort pane first and otherwise close back to the trigger. The
+ * model pane focuses the model search field. Provider headings paint their
+ * background only while pinned by scrolling. Clearing a query restores the
+ * full list and search focus. Selecting restores trigger focus without a ring
+ * until the trigger loses focus or the menu reopens. Model names match a
+ * case-insensitive ordered subsequence within each provider group, ranked by
+ * prefix, alignment score, then catalog order. Data and submission ride the
  * same per-session ModelDirectory as the /model popup; exact-model reasoning
  * metadata and the selected effort come from the Host rather than a
  * client-owned vocabulary. A rejected selection announces through the shared
@@ -42,8 +41,8 @@ import type { ModelSelectInjected } from './slots.ts'
 import css from './ModelSelect.module.css'
 import { orderModelProviders } from './provider-order.ts'
 
-/** Which pane the dropdown shows: the two-row root or one drilled-in list. */
-type Pane = 'root' | 'model' | 'effort'
+/** Which pane the dropdown shows: the model list or the drilled-in effort list. */
+type Pane = 'model' | 'effort'
 
 /** One dynamic effort row; undefined means preserve the provider default. */
 interface EffortChoice {
@@ -70,7 +69,7 @@ export function ModelSelect(
     () => directory.getSnapshot(),
   )
   const [open, setOpen] = useState(false)
-  const [pane, setPane] = useState<Pane>('root')
+  const [pane, setPane] = useState<Pane>('model')
   const [query, setQuery] = useState('')
   const [highlightedIndex, setHighlightedIndex] = useState<number | null>(null)
   const [selectionFocus, setSelectionFocus] = useState(false)
@@ -187,7 +186,8 @@ export function ModelSelect(
       ;(target ?? triggerRef.current)?.focus()
       return
     }
-    const cell = itemRefs.current[intent === 'effort' ? 1 : 0]
+    // The model pane's only row below the search field is the Effort cell.
+    const cell = itemRefs.current[0]
     ;(cell !== null && cell !== undefined && !cell.disabled ? cell : triggerRef.current)?.focus()
   }, [open, pane, showSearch])
 
@@ -244,8 +244,10 @@ export function ModelSelect(
     triggerRef.current?.focus()
     setQuery('')
     setHighlightedIndex(null)
-    if (state.current === null) paneFocus.current = 'drill'
-    setPane(state.current === null ? 'model' : 'root')
+    // The menu opens in the model pane, so its first focus lands on the
+    // search field or the model row in use.
+    paneFocus.current = 'drill'
+    setPane('model')
     setOpen(true)
     reload()
   }
@@ -257,7 +259,7 @@ export function ModelSelect(
 
   const close = (restoreFocus = false): void => {
     setOpen(false)
-    setPane('root')
+    setPane('model')
     if (restoreFocus) queueMicrotask(() => { triggerRef.current?.focus() })
   }
 
@@ -273,10 +275,10 @@ export function ModelSelect(
     setPane(next)
   }
 
-  /** Leave a drilled pane for the root one, handing the keyboard back to its cell. */
-  const back = (from: Exclude<Pane, 'root'>): void => {
+  /** Leave the effort pane for the model one, handing the keyboard back to its row. */
+  const back = (from: Exclude<Pane, 'model'>): void => {
     paneFocus.current = from
-    setPane('root')
+    setPane('model')
   }
 
   const moveFocus = (offset: number): void => {
@@ -296,8 +298,8 @@ export function ModelSelect(
     if (event.nativeEvent.isComposing) return
     if (event.key === 'Escape' && open) {
       event.preventDefault()
-      // Escape backs out of a drilled pane first, then closes.
-      if (pane !== 'root' && state.current !== null) back(pane)
+      // Escape backs out of the effort list first, then closes.
+      if (pane !== 'model') back(pane)
       else close(true)
       return
     }
@@ -325,7 +327,7 @@ export function ModelSelect(
     if (event.key === 'Tab') {
       if (event.shiftKey) {
         event.preventDefault()
-        if (pane !== 'root' && state.current !== null) back(pane)
+        if (pane !== 'model') back(pane)
         else close(true)
         return
       }
@@ -485,13 +487,8 @@ export function ModelSelect(
           aria-label={t('menu.aria')}
           aria-busy={state.status === 'loading' || busy}
         >
-          {pane === 'root' && (
+          {pane === 'model' && (
             <>
-              <button ref={itemRef()} type="button" role="menuitem" className={css.cell} onClick={() => { drill('model') }}>
-                <span className={css.cellLabel}>{t('menu.model')}</span>
-                <span className={css.cellValue}>{modelLabel}</span>
-                <IconChevronRightOutlineRegular className={css.cellChevron} />
-              </button>
               {reasoning !== undefined && (
                 <button ref={itemRef()} type="button" role="menuitem" className={css.cell} onClick={() => { drill('effort') }}>
                   <span className={css.cellLabel}>{t('menu.effort')}</span>
@@ -499,11 +496,6 @@ export function ModelSelect(
                   <IconChevronRightOutlineRegular className={css.cellChevron} />
                 </button>
               )}
-            </>
-          )}
-
-          {pane === 'model' && (
-            <>
               {showSearch && <div className={css.searchRow}>
                 <Input
                   ref={searchRef}

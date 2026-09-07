@@ -38,3 +38,13 @@ try {
 } catch (reason) {
   reportFailure(reason)
 }
+
+// PWA: Service Worker nur im Produktions-Build registrieren (App-Shell-Cache,
+// Offline-Fallback). Der Worker wird aus dem dist-Root ausgeliefert (/sw.js).
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch((error: unknown) => {
+      console.error('dsh-pwa: service worker registration failed', error)
+    })
+  })
+}

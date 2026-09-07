@@ -12,7 +12,6 @@ import { clientRequestSchema } from './rpc-schema.ts'
 import { bridge } from './http-bridge.ts'
 import { isTrustedApiRequest } from './api-request-trust.ts'
 import { API_PATH } from './api-path.ts'
-import type { BrowserAuth } from './browser-auth.ts'
 import { OperatorPeer } from './operator-peer.ts'
 import type {
   PeerAdmission,
@@ -59,6 +58,19 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
+/**
+ * The browser-authentication face HostConnectionService needs. The shipped
+ * implementation is `BrowserAuth` (process-token exchange + signed cookie);
+ * a deployment behind its own authentication layer (reverse-proxy forward-auth)
+ * may supply a permissive provider instead by setting the Connection config
+ * `browserAuth: false`.
+ */
+export interface BrowserAuthProvider {
+  isAuthenticated(request: ConnectionTrustRequest): boolean
+  authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean
+  authenticatedUrl(baseUrl: string): string
+}
+
 /** Host Connection service whose channel registrations belong to the caller fiber. */
 export class HostConnectionService extends Service implements HostConnectionHandle {
   /** The operator Peer every admitted request speaks for. */
@@ -70,12 +82,12 @@ export class HostConnectionService extends Service implements HostConnectionHand
    * Provide the Host half over the active HTTP server.
    * @param ctx - owning Connection plugin context.
    * @param trustedHosts - deployment authorities accepted by the Host/Origin fence.
-   * @param browserAuth - process token and persistent browser-session owner.
+   * @param browserAuth - browser-authentication provider (token/cookie or permissive).
    */
   constructor(
     ctx: Context,
     private readonly trustedHosts: readonly string[],
-    private readonly browserAuth: BrowserAuth,
+    private readonly browserAuth: BrowserAuthProvider,
   ) {
     super(ctx, 'connection')
     this.operator = new OperatorPeer(ctx)
@@ -121,6 +133,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
   authenticatedUrl(baseUrl: string): string {
     return this.browserAuth.authenticatedUrl(baseUrl)
   }
+
 
   /**
    * Compose one shared-channel Fetch handler from exact routes and its interceptor.

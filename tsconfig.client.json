@@ -142,6 +142,8 @@
     { "path": "./packages/api/workspace-files/tsconfig.client.json" },
     { "path": "./packages/client/web" },
     { "path": "./packages/context/file-reference" },
+    { "path": "./packages/client/eduki-catalog" },
+    { "path": "./packages/client/eduki-recherche" },
     { "path": "./apps/web" }
   ]
 }
