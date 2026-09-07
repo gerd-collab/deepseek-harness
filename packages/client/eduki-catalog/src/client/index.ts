@@ -1200,10 +1200,12 @@ function CatalogOverlay() {
           h('span', { className: 'eduki-cat-subject-filter__label' }, catalogText.label),
           h('select', {
             value: catalogFilter,
-            onChange: (e: { target: { value: string } }) => setCatalogFilter(e.target.value as '' | 'einstiegsheft' | 'premium'),
+            onChange: (e: { target: { value: string } }) => setCatalogFilter(e.target.value as CatalogFilter),
             'aria-label': catalogText.label,
           },
             h('option', { value: '' }, catalogText.all),
+            h('option', { value: 'grundschule' }, catalogText.grundschule),
+            h('option', { value: 'sekundarschule' }, catalogText.sekundar),
             h('option', { value: 'einstiegsheft' }, catalogText.intro),
             h('option', { value: 'premium' }, catalogText.premium),
           ),
