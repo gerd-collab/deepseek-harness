@@ -46,15 +46,27 @@ export function createWebConnectionRpc(doFetch?: RpcFetch, openStream?: RpcStrea
       // The channel key is absolute; a page posts the document-relative form, and
       // a carrier that resolves against the Host root accepts the same form.
       const route = `${channel}/${endpoint}`.slice(1)
+      // Authelia forward-auth in front of this deployment answers an expired
+      // proxy session with a cross-origin 302 to the login page. The default
+      // follow mode turns that into an unclassifiable CORS TypeError that the
+      // connection layer retries forever while the UI stays blocked. Manual
+      // mode keeps the redirect visible as an opaque response so the page can
+      // re-authenticate: a reload re-enters through Caddy, which redirects to
+      // Authelia, and the login round-trip returns to the app.
       const response = await send(
         route,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(message),
+          redirect: 'manual',
           ...signal === undefined ? {} : { signal },
         },
       )
+      if (response.type === 'opaqueredirect') {
+        window.location.reload()
+        throw new Error(`re-authenticating for ${channel}/${endpoint}`)
+      }
       if (!response.ok) {
         throw new Error(`transport failure for ${channel}/${endpoint}: HTTP ${response.status}`)
       }

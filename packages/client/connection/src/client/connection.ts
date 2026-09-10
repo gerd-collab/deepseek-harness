@@ -74,6 +74,30 @@ export type ConnectionGenerationSource = (
  * State (generation/attempt) is instance-private, never in the store.
  * Sink exceptions do not kill the generation loop.
  */
+
+/**
+ * Authelia forward-auth in front of a deployment answers an expired proxy
+ * session with a cross-origin 302; a WebSocket handshake through it dies as
+ * an unclassified close and the retry loop below would spin forever behind a
+ * blocked UI. After two failed attempts, probe one /api request with manual
+ * redirect tracking: an opaque redirect means the proxy wants a fresh login —
+ * reload the page so Caddy redirects into the Authelia login round-trip.
+ */
+async function reloadOnAuthRedirect(attempt: number): Promise<void> {
+  if (attempt < 2) return
+  try {
+    const location = globalThis.location
+    if (location === undefined || location.origin === 'null') return
+    const probe = await globalThis.fetch(new URL('api', location.origin), {
+      method: 'POST',
+      redirect: 'manual',
+    })
+    if (probe.type === 'opaqueredirect') window.location.reload()
+  } catch {
+    // Transport noise stays with the retry loop; only the redirect is ours.
+  }
+}
+
 export class ConnectionController {
   private generation = 0
   private attempt = 0
@@ -194,6 +218,7 @@ export class ConnectionController {
           if (retryDelay.signal.aborted) continue
         }
         console.warn(`[connection] connection lost, retry #${String(attempt)}`)
+        void reloadOnAuthRedirect(attempt)
         this.callSink(() => { this.sinks.onReconnectRequested?.() })
         if (!this.isRunning()) return
       }

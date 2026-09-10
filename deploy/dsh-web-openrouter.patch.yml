@@ -1,0 +1,41 @@
+# Patch to configure llm-pi-ai with OpenRouter (Nemotron 3 Ultra free)
+# and disable Together AI provider.
+# Apply with: dsh web --patch /opt/dsh/deploy/dsh-web-openrouter.patch.yml
+
+- id: llm-pi-ai
+  config:
+    providers:
+      openrouter:
+        apiKeyEnv: OPENROUTER_API_KEY
+        baseURL: https://openrouter.ai/api/v1
+        displayName: "OpenRouter"
+        models:
+          - id: nvidia/nemotron-3-ultra
+            name: "Nemotron 3 Ultra (Free)"
+            contextWindow: 128000
+            maxTokens: 4096
+            input: ["text"]
+        # OpenRouter uses OpenAI-compatible completions API
+        api: openai-completions
+        # Recommended headers for OpenRouter
+        headers:
+          HTTP-Referer: "https://cyberschooling.eu"
+          X-Title: "CyberSchooling dsh"
+      # Together AI provider explicitly NOT configured - removes all Together models including GLM-3.5 Flash
+      # together:
+      #   apiKeyEnv: TOGETHER_API_KEY
+      #   baseURL: https://api.together.xyz/v1
+      #   displayName: "Together AI"
+      #   models:
+      #     - id: meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo
+      #       name: "Llama 3.1 8B Instruct Turbo"
+      #       contextWindow: 128000
+      #       maxTokens: 4096
+      #       input: ["text"]
+      #   api: openai-completions
+
+# Update default model selection to use Nemotron 3 Ultra
+- id: agent-default-model
+  config:
+    provider: openrouter
+    model: nvidia/nemotron-3-ultra

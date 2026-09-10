@@ -30,12 +30,10 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 /** Required service: only the slot registry. */
 export const inject = ['slots']
 
-const CATALOG_LABELS = { de: { all: 'Alle Themenhefte', grundschule: 'Grundschulhefte', sekundar: 'Sekundarschule', intro: 'Einstiegshefte · 3,99 €', premium: 'Premium-Autorenhefte', label: 'Heftauswahl', badge: '★ Einstiegsheft · 3,99 €', help: 'Erstes Themenheft dieses Fachs · 3,99 €' } } as const
+const CATALOG_LABELS = { de: { all: 'Alle Themenhefte', categoryAll: 'Alle Kategorien', grundschule: 'Grundschule', sekundar: 'Sekundarschule', intro: 'Einstiegshefte · 3,99 €', premium: 'Premium-Autorenhefte', label: 'Heftauswahl', categoryLabel: 'Kategorie', badge: '★ Einstiegsheft · 3,99 €', help: 'Erstes Themenheft dieses Fachs · 3,99 €' } } as const
 const catalogText = CATALOG_LABELS.de
 
-// Katalog-Filter: eigene Liste pro Kategorie (Grundschule → Sekundarschule →
-// Premium) plus die Auswahlliste der vergünstigten Einstiegshefte.
-type CatalogFilter = '' | 'grundschule' | 'sekundarschule' | 'einstiegsheft' | 'premium'
+type CatalogCategory = '' | 'grundschule' | 'sekundarschule' | 'premium'
 
 const SNAPSHOT_URL = 'https://dsh.cyberschooling.eu/preview/edukit-catalog-snapshot.json'
 const UPLOAD_ENDPOINT = 'https://ws.cyberschooling.eu/api/eduki-products/upload-heft'
@@ -149,20 +147,26 @@ function isEinstiegsheft(h: Heft): boolean {
   return h.einstiegsheft === true || (h.tags || []).includes('einstiegsheft')
 }
 
-function isPremiumHeft(h: Heft): boolean {
-  return h.premium === true || h.category === 'premium-autorenheft' || (h.tags || []).includes('premium-autorenheft')
-}
-
-function isGrundschulHeft(h: Heft): boolean {
-  return h.category === 'grundschulheft'
+function catalogCategory(h: Heft): Exclude<CatalogCategory, ''> {
+  if (h.premium === true || h.category === 'premium-autorenheft' || (h.tags || []).includes('premium-autorenheft')) {
+    return 'premium'
+  }
+  if (h.category === 'grundschulheft'
     || (h.tags || []).includes('grundschulheft')
     || h.productFamily === 'PRIMARY'
-    || (h.group === 'PRIMARY')
+    || h.group === 'PRIMARY') {
+    return 'grundschule'
+  }
+  // Alle bisherigen Standardhefte sind Sekundarschule.
+  return 'sekundarschule'
 }
 
-function isSekundarHeft(h: Heft): boolean {
-  // Alle bisherigen normalen Titelhefte: weder Grundschule noch Premium.
-  return !isGrundschulHeft(h) && !isPremiumHeft(h)
+function matchesCategory(h: Heft, category: CatalogCategory): boolean {
+  return !category || catalogCategory(h) === category
+}
+
+function introductoryKey(h: Heft): string {
+  return `${catalogCategory(h)}\u0000${(h.subject || '').trim().toLocaleLowerCase('de-DE')}`
 }
 
 // ── Shared open-state (sidebar trigger <-> overlay) ────────────────────────
@@ -307,17 +311,16 @@ function HeftList(props: {
   hefte: Heft[]
   query: string
   subjectFilter: string
-  catalogFilter: CatalogFilter
+  categoryFilter: CatalogCategory
+  einstiegOnly: boolean
   onSelect: (h: Heft) => void
   onUpload: (title: string) => void
 }) {
   const q = props.query.trim().toLowerCase()
   const filtered = props.hefte.filter((h) => {
     if (props.subjectFilter && h.subject !== props.subjectFilter) return false
-    if (props.catalogFilter === 'grundschule' && !isGrundschulHeft(h)) return false
-    if (props.catalogFilter === 'sekundarschule' && !isSekundarHeft(h)) return false
-    if (props.catalogFilter === 'einstiegsheft' && !isEinstiegsheft(h)) return false
-    if (props.catalogFilter === 'premium' && !isPremiumHeft(h)) return false
+    if (!matchesCategory(h, props.categoryFilter)) return false
+    if (props.einstiegOnly && !isEinstiegsheft(h)) return false
     if (!q) return true
     const hay = [
       h.title, h.shortTitle, h.titleContext, h.subject, h.group, h.grade, h.release, h.status,
@@ -325,17 +328,22 @@ function HeftList(props: {
     ].filter(Boolean).join(' ').toLowerCase()
     return hay.includes(q)
   })
-  if (filtered.length === 0) {
+  // Defensive deduplication: even a malformed older snapshot may only show
+  // one introductory booklet per category and subject.
+  const visible = props.einstiegOnly
+    ? filtered.filter((h, index, all) => all.findIndex(candidate => introductoryKey(candidate) === introductoryKey(h)) === index)
+    : filtered
+  if (visible.length === 0) {
     return h('div', { className: 'eduki-cat-empty' },
-      props.catalogFilter === 'grundschule' ? 'Keine Grundschulhefte gefunden — Kategorie „grundschulheft“ fehlt im Snapshot.'
-        : props.catalogFilter === 'sekundarschule' ? 'Keine Sekundarhefte gefunden.'
-        : props.catalogFilter === 'einstiegsheft' ? 'Keine Einstiegshefte gefunden — Tag „einstiegsheft“ fehlt im Snapshot.'
-        : props.catalogFilter === 'premium' ? 'Keine Premium-Autorenhefte gefunden.'
+      props.categoryFilter === 'grundschule' ? 'Keine Grundschulhefte gefunden.'
+        : props.categoryFilter === 'sekundarschule' ? 'Keine Sekundarhefte gefunden.'
+        : props.categoryFilter === 'premium' ? 'Keine Premium-Autorenhefte gefunden.'
+        : props.einstiegOnly ? 'Keine Einstiegshefte gefunden — Tag „einstiegsheft“ fehlt im Snapshot.'
         : q ? `Keine Hefte passen zu „${props.query}“`
           : (props.subjectFilter ? `Keine Hefte zu „${props.subjectFilter}“ gefunden.` : 'Keine Hefte gefunden.'))
   }
   return h('div', null,
-    filtered.map((heft) => {
+    visible.map((heft) => {
       const fileCount = (heft.files || []).length
       // Individueller Kurztitel: modernere Snapshot-Versionen liefern
       // ``shortTitle`` (die eigentliche Kompetenz/der Topic) und
@@ -1021,19 +1029,29 @@ function CatalogOverlay() {
   const subjectFilter = subjPair[0]
   const setSubjectFilter = subjPair[1]
 
-  // Katalogauswahl: genau eine Ausgabegruppe anzeigen und Auswahl persistent halten.
-  const CATALOG_FILTER_KEY = 'eduki-cat-filter'
-  const VALID_FILTERS: CatalogFilter[] = ['', 'grundschule', 'sekundarschule', 'einstiegsheft', 'premium']
-  const catalogFilterPair = useState<CatalogFilter>(() => {
+  // Schulform und Einstiegsansicht sind unabhängig: Die Auswahl der
+  // Einstiegshefte bleibt innerhalb der gerade gewählten Kategorie.
+  const CATEGORY_FILTER_KEY = 'eduki-cat-category'
+  const VALID_CATEGORIES: CatalogCategory[] = ['', 'grundschule', 'sekundarschule', 'premium']
+  const categoryFilterPair = useState<CatalogCategory>(() => {
     try {
-      const saved = window.localStorage.getItem(CATALOG_FILTER_KEY) as CatalogFilter
-      return VALID_FILTERS.includes(saved) ? saved : ''
+      const saved = window.localStorage.getItem(CATEGORY_FILTER_KEY) as CatalogCategory
+      return VALID_CATEGORIES.includes(saved) ? saved : ''
     } catch { return '' }
   })
-  const catalogFilter = catalogFilterPair[0]
-  const setCatalogFilter = (v: CatalogFilter): void => {
-    catalogFilterPair[1](v)
-    try { window.localStorage.setItem(CATALOG_FILTER_KEY, v) } catch { /* ignore */ }
+  const categoryFilter = categoryFilterPair[0]
+  const setCategoryFilter = (v: CatalogCategory): void => {
+    categoryFilterPair[1](v)
+    try { window.localStorage.setItem(CATEGORY_FILTER_KEY, v) } catch { /* ignore */ }
+  }
+  const EINSTIEG_KEY = 'eduki-cat-einstieg-only'
+  const einstiegPair = useState<boolean>(() => {
+    try { return window.localStorage.getItem(EINSTIEG_KEY) === '1' } catch { return false }
+  })
+  const einstiegOnly = einstiegPair[0]
+  const setEinstiegOnly = (v: boolean): void => {
+    einstiegPair[1](v)
+    try { window.localStorage.setItem(EINSTIEG_KEY, v ? '1' : '0') } catch { /* ignore */ }
   }
 
   const selectedPair = useState<Heft | null>(null)
@@ -1121,18 +1139,15 @@ function CatalogOverlay() {
       pendingItems: upload.items.filter(it => it.state !== 'empty'),
     })
   } else {
-    const einstiegCount = hefte.filter(isEinstiegsheft).length
-    const grundschulCount = hefte.filter(isGrundschulHeft).length
-    const sekundaerCount = hefte.filter(isSekundarHeft).length
-    const premiumCount = hefte.filter(isPremiumHeft).length
+    const categoryHefte = hefte.filter(h => matchesCategory(h, categoryFilter))
+    const einstiegCount = new Set(categoryHefte.filter(isEinstiegsheft).map(introductoryKey)).size
+    const categoryCountLabel = categoryFilter === 'grundschule' ? 'Grundschulhefte'
+      : categoryFilter === 'sekundarschule' ? 'Sekundarhefte'
+        : 'Premium-Autorenhefte'
     const meta = h('div', { className: 'eduki-cat-meta' },
-      h('span', null, catalogFilter === 'grundschule'
-        ? `${grundschulCount} Grundschulhefte (von ${hefte.length} Heften insgesamt)`
-        : catalogFilter === 'sekundarschule' ? `${sekundaerCount} Sekundarhefte`
-        : catalogFilter === 'einstiegsheft'
-        ? `${einstiegCount} Einstiegshefte (von ${hefte.length} Heften insgesamt)`
-        : catalogFilter === 'premium' ? `${premiumCount} Premium-Autorenhefte`
-        : `${hefte.length} Hefte insgesamt`),
+      h('span', null, einstiegOnly
+        ? `${einstiegCount} Einstiegshefte${categoryFilter ? '' : ` (von ${hefte.length} Heften insgesamt)`}`
+        : categoryFilter ? `${categoryHefte.length} ${categoryCountLabel}` : `${hefte.length} Hefte insgesamt`),
       h('span', null, 'Snapshot: ' + new Date(state.snapshot.generated_at).toLocaleString()),
     )
     body = h('div', null,
@@ -1141,7 +1156,8 @@ function CatalogOverlay() {
         hefte,
         query,
         subjectFilter,
-        catalogFilter,
+        categoryFilter,
+        einstiegOnly,
         onSelect: setSelected,
         onUpload: (title: string) => upload.openForHeft(title),
       }),
@@ -1197,18 +1213,27 @@ function CatalogOverlay() {
           ),
         ),
         h('label', { className: 'eduki-cat-subject-filter' },
-          h('span', { className: 'eduki-cat-subject-filter__label' }, catalogText.label),
+          h('span', { className: 'eduki-cat-subject-filter__label' }, catalogText.categoryLabel + ':'),
           h('select', {
-            value: catalogFilter,
-            onChange: (e: { target: { value: string } }) => setCatalogFilter(e.target.value as CatalogFilter),
-            'aria-label': catalogText.label,
+            value: categoryFilter,
+            onChange: (e: { target: { value: string } }) => setCategoryFilter(e.target.value as CatalogCategory),
+            'aria-label': 'Kategorie auswählen',
           },
-            h('option', { value: '' }, catalogText.all),
+            h('option', { value: '' }, catalogText.categoryAll),
             h('option', { value: 'grundschule' }, catalogText.grundschule),
             h('option', { value: 'sekundarschule' }, catalogText.sekundar),
-            h('option', { value: 'einstiegsheft' }, catalogText.intro),
             h('option', { value: 'premium' }, catalogText.premium),
           ),
+        ),
+        h('label', { className: 'eduki-cat-einstieg-switch', title: 'Nur ein Einstiegsheft je Fach in der gewählten Kategorie anzeigen' },
+          h('input', {
+            type: 'checkbox', checked: einstiegOnly,
+            onChange: (e: { target: { checked: boolean } }) => setEinstiegOnly(e.target.checked),
+            'aria-label': 'Nur Einstiegshefte anzeigen',
+          }),
+          h('span', { className: 'eduki-cat-einstieg-switch__track', 'aria-hidden': 'true' },
+            h('span', { className: 'eduki-cat-einstieg-switch__thumb' })),
+          h('span', { className: 'eduki-cat-einstieg-switch__label' }, 'Nur Einstiegshefte'),
         ),
       ),
     h('div', { className: 'eduki-cat-body' }, body),
