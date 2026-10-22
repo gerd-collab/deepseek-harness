@@ -104,6 +104,13 @@ type Heft = {
   level?: string
   priceCents?: number
   priceEur?: number
+  // Freigabestatus (Kritik Welle 3, E13/D4): „freigegeben“ / „nicht
+  // freigegeben“; katalogStatus nennt den Grund einer Rücknahme.
+  freigabeStatus?: string
+  freigabeStand?: string
+  abnahmeProtokoll?: string
+  katalogStatus?: string
+  pruefstand?: string
 }
 
 type DbEntry = {
@@ -127,6 +134,21 @@ type CatalogSnapshot = {
   generated_at: string
   source: string
   hefte: Heft[]
+  // Zurückgezogene Hefte stehen nicht im Verkauf; der Grund wird
+  // ausgewiesen (Kritik Sekundarschulhefte E1/E13).
+  zurueckgezogen?: CatalogWithdrawal[]
+}
+
+type CatalogWithdrawal = {
+  id: string
+  title?: string
+  subject?: string
+  grade?: string
+  katalogStatus?: string
+  pruefstand?: string
+  // Klartextgrund der Rücknahme (z. B. „c′ steht auf der Hilfslinie, nicht
+  // darunter (S45)“).
+  zurueckgezogenGrund?: string
 }
 
 // ── Status-Labels & Farben ─────────────────────────────────────────────────
@@ -306,6 +328,43 @@ function StatusBadge(props: { status: string }) {
   return h('span', { className: 'eduki-cat-badge ' + meta.cls }, meta.label)
 }
 
+// ── Freigabestatus (Kritik Welle 3, E13/D4) ────────────────────────────────
+// Die Kritik moniert: „review_ready und ein Verkaufspreis nebeneinander“
+// macht den Freigabestatus für Käufer nicht erkennbar. Der Katalog führt
+// je Heft ein Freigabestatus-Feld; der Heftkatalog zeigt es an.
+const FREIGABE_LABELS: Record<string, { label: string; cls: string }> = {
+  freigegeben: { label: '✓ Freigegeben', cls: 'eduki-cat-badge--green' },
+  nicht_freigegeben: { label: 'Nicht freigegeben', cls: 'eduki-cat-badge--gray' },
+}
+
+const ZURUECKGEZOGEN_GRUENDE: Record<string, string> = {
+  zurueckgezogen_fachfehler: 'Fachfehler — aus dem Verkauf genommen',
+  zurueckgezogen_testartefakt: 'Testartefakt — nicht veröffentlichen',
+  duplikat_zusammengefuehrt: 'Dublette — im verbleibenden Heft zusammengeführt',
+  nicht_freigegeben_kein_audio: 'Hörheft ohne Ton — nicht freigegeben',
+  nicht_freigegeben_grundschulstoff: 'Grundschulstoff — falsche Kategorie',
+  nicht_freigegeben_keine_stufe: 'Klassenstufe fehlt — nicht freigegeben',
+}
+
+function FreigabeBadge(props: { heft: Heft }) {
+  const heft = props.heft
+  const katalogStatus = String(heft.katalogStatus || '')
+  if (katalogStatus.startsWith('zurueckgezogen')) {
+    const grund = ZURUECKGEZOGEN_GRUENDE[katalogStatus] || katalogStatus
+    return h('span', {
+      className: 'eduki-cat-badge eduki-cat-badge--red',
+      title: grund + (heft.pruefstand ? ' (Prüfstand ' + heft.pruefstand + ')' : ''),
+    }, 'Zurückgezogen')
+  }
+  const status = String(heft.freigabeStatus || '')
+  if (!status) return null
+  const meta = FREIGABE_LABELS[status] || { label: status, cls: 'eduki-cat-badge--gray' }
+  const titel = status === 'freigegeben'
+    ? 'Inhaltsabnahme bestanden' + (heft.freigabeStand ? ' (Stand ' + heft.freigabeStand + ')' : '')
+    : 'Keine bestandene Inhaltsabnahme' + (heft.abnahmeProtokoll ? ' — ' + heft.abnahmeProtokoll : '')
+  return h('span', { className: 'eduki-cat-badge ' + meta.cls, title: titel }, meta.label)
+}
+
 // ── Views ──────────────────────────────────────────────────────────────────
 function HeftList(props: {
   hefte: Heft[]
@@ -337,10 +396,10 @@ function HeftList(props: {
     return h('div', { className: 'eduki-cat-empty' },
       props.categoryFilter === 'grundschule' ? 'Keine Grundschulhefte gefunden.'
         : props.categoryFilter === 'sekundarschule' ? 'Keine Sekundarhefte gefunden.'
-        : props.categoryFilter === 'premium' ? 'Keine Premium-Autorenhefte gefunden.'
-        : props.einstiegOnly ? 'Keine Einstiegshefte gefunden — Tag „einstiegsheft“ fehlt im Snapshot.'
-        : q ? `Keine Hefte passen zu „${props.query}“`
-          : (props.subjectFilter ? `Keine Hefte zu „${props.subjectFilter}“ gefunden.` : 'Keine Hefte gefunden.'))
+          : props.categoryFilter === 'premium' ? 'Keine Premium-Autorenhefte gefunden.'
+            : props.einstiegOnly ? 'Keine Einstiegshefte gefunden — Tag „einstiegsheft“ fehlt im Snapshot.'
+              : q ? `Keine Hefte passen zu „${props.query}“`
+                : (props.subjectFilter ? `Keine Hefte zu „${props.subjectFilter}“ gefunden.` : 'Keine Hefte gefunden.'))
   }
   return h('div', null,
     visible.map((heft) => {
@@ -395,6 +454,7 @@ function HeftList(props: {
               title: catalogText.help,
             }, catalogText.badge)
             : null,
+          h(FreigabeBadge, { heft }),
           heft.source === 'direct'
             ? h('span', { className: 'eduki-cat-badge eduki-cat-badge--blue' }, '↑ Direkt-Upload')
             : heft.generated
@@ -564,6 +624,8 @@ function HeftDetail(props: {
       [heft.titleContext, heft.group, heft.subject, heft.grade].filter(Boolean).join(' · '),
       '  ',
       h(StatusBadge, { status: heft.status }),
+      '  ',
+      h(FreigabeBadge, { heft }),
     ),
     // Revisions-Dropdown: rendert NUR wenn mehr als eine Revision vorliegt.
     // Bei genau einer Revision versteckt sich der Block — die Dateiliste
@@ -1161,6 +1223,19 @@ function CatalogOverlay() {
         onSelect: setSelected,
         onUpload: (title: string) => upload.openForHeft(title),
       }),
+      // Zurückgezogene Hefte stehen nicht im Verkauf; ihre Gründe werden
+      // ausgewiesen (Kritik Sekundarschulhefte E1: die gesperrten Hefte
+      // verlassen den Katalog — sichtbar bleibt, warum).
+      (state.snapshot.zurueckgezogen || []).length
+        ? h('details', { className: 'eduki-cat-withdrawn' },
+          h('summary', null, `Zurückgezogen (${(state.snapshot.zurueckgezogen || []).length})`),
+          h('ul', null, (state.snapshot.zurueckgezogen || []).map(z => h('li', {
+            key: z.id,
+            title: [z.subject, z.grade, z.pruefstand].filter(Boolean).join(' · '),
+          },
+          `${z.title || z.id} — ${z.zurueckgezogenGrund || ZURUECKGEZOGEN_GRUENDE[String(z.katalogStatus || '')] || z.katalogStatus || 'ohne Angabe'}`))),
+        )
+        : null,
     )
   }
   return h(
@@ -1219,10 +1294,10 @@ function CatalogOverlay() {
             onChange: (e: { target: { value: string } }) => setCategoryFilter(e.target.value as CatalogCategory),
             'aria-label': 'Kategorie auswählen',
           },
-            h('option', { value: '' }, catalogText.categoryAll),
-            h('option', { value: 'grundschule' }, catalogText.grundschule),
-            h('option', { value: 'sekundarschule' }, catalogText.sekundar),
-            h('option', { value: 'premium' }, catalogText.premium),
+          h('option', { value: '' }, catalogText.categoryAll),
+          h('option', { value: 'grundschule' }, catalogText.grundschule),
+          h('option', { value: 'sekundarschule' }, catalogText.sekundar),
+          h('option', { value: 'premium' }, catalogText.premium),
           ),
         ),
         h('label', { className: 'eduki-cat-einstieg-switch', title: 'Nur ein Einstiegsheft je Fach in der gewählten Kategorie anzeigen' },
@@ -1282,6 +1357,10 @@ const CSS = [
   '.eduki-cat-status--error{color:#c0392b}',
   '.eduki-cat-meta{padding:8px 20px;font-size:11px;color:#888;border-bottom:1px solid rgba(0,0,0,.05);display:flex;gap:14px;flex-wrap:wrap}',
   '@media (prefers-color-scheme:dark){.eduki-cat-meta{border-bottom-color:rgba(255,255,255,.05)}}',
+  '.eduki-cat-withdrawn{padding:10px 20px 16px;font-size:11.5px;color:#777;border-top:1px solid rgba(0,0,0,.05)}',
+  '.eduki-cat-withdrawn summary{cursor:pointer;font-weight:600;color:#666}',
+  '.eduki-cat-withdrawn ul{margin:8px 0 0;padding-left:18px;line-height:1.7}',
+  '@media (prefers-color-scheme:dark){.eduki-cat-withdrawn{border-top-color:rgba(255,255,255,.05)}.eduki-cat-withdrawn summary{color:#999}}',
 
   // Heft list row: button (click-to-detail) + side upload-button.
   '.eduki-cat-heft-row{display:flex;align-items:stretch;gap:0;border-bottom:1px solid rgba(0,0,0,.04);box-sizing:border-box}',
